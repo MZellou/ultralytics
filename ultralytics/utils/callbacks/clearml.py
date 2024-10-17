@@ -7,7 +7,7 @@ try:
     assert SETTINGS["clearml"] is True  # verify integration is enabled
     import clearml
     from clearml import Task
-
+    import os
     assert hasattr(clearml, "__version__")  # verify package is not directory
 
 except (ImportError, AssertionError):
@@ -108,6 +108,21 @@ def on_fit_epoch_end(trainer):
             task.get_logger().report_scalar("val", k, v, iteration=trainer.epoch)
         if trainer.epoch == 0:
             from ultralytics.utils.torch_utils import model_info_for_loggers
+            
+            # SLURM error files log
+            slurm_error_file = os.environ.get('SLURM_ERRORFILE')
+            slurm_sbatch_file = os.environ.get('SLURM_SBATCH_FILE')
+            slurm_job_id = os.environ.get('SLURM_JOB_ID')
+            # Check if the Slurm log files exist
+            if os.path.exists(slurm_error_file):
+                task.upload_artifact(name=f'Slurm Output Log (job n°{slurm_job_id})', 
+                                        artifact_object=slurm_error_file, 
+                                        delete_after_upload=False)
+                
+            if os.path.exists(slurm_sbatch_file):
+                task.upload_artifact(name=f'Slurm batch source (job n°{slurm_job_id})', 
+                                        artifact_object=slurm_sbatch_file, 
+                                        delete_after_upload=False)
 
             for k, v in model_info_for_loggers(trainer).items():
                 task.get_logger().report_single_value(k, v)

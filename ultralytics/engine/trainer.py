@@ -20,7 +20,8 @@ import numpy as np
 import torch
 from torch import distributed as dist
 from torch import nn, optim
-
+from torch.distributed.elastic.multiprocessing.errors import record
+import socket
 from ultralytics.cfg import get_cfg, get_save_dir
 from ultralytics.data.utils import check_cls_dataset, check_det_dataset
 from ultralytics.nn.tasks import attempt_load_one_weight, attempt_load_weights
@@ -29,6 +30,7 @@ from ultralytics.utils import (
     LOCAL_RANK,
     LOGGER,
     RANK,
+    WORLD_SIZE,
     TQDM,
     __version__,
     callbacks,
@@ -129,7 +131,7 @@ class BaseTrainer:
 
         # Model and Dataset
         self.model = check_model_file_from_stem(self.args.model)  # add suffix, i.e. yolov8n -> yolov8n.pt
-        with torch_distributed_zero_first(LOCAL_RANK):  # avoid auto-downloading dataset multiple times
+        with torch_distributed_zero_first(RANK):  # avoid auto-downloading dataset multiple times
             self.trainset, self.testset = self.get_dataset()
         self.ema = None
 
@@ -169,7 +171,9 @@ class BaseTrainer:
 
     def train(self):
         """Allow device='', device=None on Multi-GPU systems to default to device=0."""
-        if isinstance(self.args.device, str) and len(self.args.device):  # i.e. device='0' or device='0,1,2,3'
+        if WORLD_SIZE: # DDP torchrun
+            world_size = WORLD_SIZE
+        elif isinstance(self.args.device, str) and len(self.args.device):  # i.e. device='0' or device='0,1,2,3'
             world_size = len(self.args.device.split(","))
         elif isinstance(self.args.device, (tuple, list)):  # i.e. device=[0, 1, 2, 3] (multi-GPU from CLI is list)
             world_size = len(self.args.device)
@@ -214,18 +218,28 @@ class BaseTrainer:
             self.lf = lambda x: max(1 - x / self.epochs, 0) * (1.0 - self.args.lrf) + self.args.lrf  # linear
         self.scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=self.lf)
 
+    @record
     def _setup_ddp(self, world_size):
         """Initializes and sets the DistributedDataParallel parameters for training."""
-        torch.cuda.set_device(RANK)
-        self.device = torch.device("cuda", RANK)
+        
+        hostname = socket.gethostname()
+        torch.cuda.set_device(LOCAL_RANK)
+        self.device = torch.device("cuda", LOCAL_RANK)
         # LOGGER.info(f'DDP info: RANK {RANK}, WORLD_SIZE {world_size}, DEVICE {self.device}')
         os.environ["TORCH_NCCL_BLOCKING_WAIT"] = "1"  # set to enforce timeout
-        dist.init_process_group(
-            backend="nccl" if dist.is_nccl_available() else "gloo",
-            timeout=timedelta(seconds=10800),  # 3 hours
-            rank=RANK,
-            world_size=world_size,
-        )
+        try:
+            dist.init_process_group(
+                backend="nccl" if dist.is_nccl_available() else "gloo",
+                timeout=timedelta(seconds=10800),  # 3 hours
+                rank=RANK,
+                world_size=WORLD_SIZE,
+            )
+            dist.barrier()
+        except torch.distributed.elastic.rendezvous.api.RendezvousConnectionError as e:
+            print(e.inner_exception.args[0])
+        
+        LOGGER.info(f'DDP info (HEADNODE): HOSTNAME : {hostname}')
+        
 
     def _setup_train(self, world_size):
         """Builds dataloaders and optimizer on correct rank process."""
@@ -270,7 +284,7 @@ class BaseTrainer:
             torch.amp.GradScaler("cuda", enabled=self.amp) if TORCH_2_4 else torch.cuda.amp.GradScaler(enabled=self.amp)
         )
         if world_size > 1:
-            self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[RANK], find_unused_parameters=True)
+            self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK, find_unused_parameters=True)
 
         # Check imgsz
         gs = max(int(self.model.stride.max() if hasattr(self.model, "stride") else 32), 32)  # grid size (max stride)
@@ -322,7 +336,7 @@ class BaseTrainer:
 
     def _do_train(self, world_size=1):
         """Train completed, evaluate and plot if specified by arguments."""
-        if world_size > 1:
+        if world_size > 1 or WORLD_SIZE > 1:
             self._setup_ddp(world_size)
         self._setup_train(world_size)
 
