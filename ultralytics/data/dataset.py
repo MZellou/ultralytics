@@ -12,7 +12,7 @@ import torch
 from PIL import Image
 from torch.utils.data import ConcatDataset
 
-from ultralytics.utils import LOCAL_RANK, NUM_THREADS, TQDM, colorstr
+from ultralytics.utils import LOCAL_RANK, RANK, NUM_THREADS, TQDM, colorstr
 from ultralytics.utils.ops import resample_segments
 from ultralytics.utils.torch_utils import TORCHVISION_0_18
 
@@ -143,7 +143,7 @@ class YOLODataset(BaseDataset):
 
         # Display cache
         nf, nm, ne, nc, n = cache.pop("results")  # found, missing, empty, corrupt, total
-        if exists and LOCAL_RANK in {-1, 0}:
+        if exists and RANK in {-1, 0}:
             d = f"Scanning {cache_path}... {nf} images, {nm + ne} backgrounds, {nc} corrupt"
             TQDM(None, desc=self.prefix + d, total=n, initial=n)  # display results
             if cache["msgs"]:
@@ -487,7 +487,7 @@ class ClassificationDataset:
             assert cache["version"] == DATASET_CACHE_VERSION  # matches current version
             assert cache["hash"] == get_hash([x[0] for x in self.samples])  # identical hash
             nf, nc, n, samples = cache.pop("results")  # found, missing, empty, corrupt, total
-            if LOCAL_RANK in {-1, 0}:
+            if RANK in {-1, 0}:
                 d = f"{desc} {nf} images, {nc} corrupt"
                 TQDM(None, desc=d, total=n, initial=n)
                 if cache["msgs"]:
