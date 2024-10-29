@@ -169,6 +169,7 @@ class BaseTrainer:
         for callback in self.callbacks.get(event, []):
             callback(self)
 
+    @record
     def train(self):
         """Allow device='', device=None on Multi-GPU systems to default to device=0."""
         if WORLD_SIZE: # DDP torchrun
@@ -230,7 +231,7 @@ class BaseTrainer:
         try:
             dist.init_process_group(
                 backend="nccl" if dist.is_nccl_available() else "gloo",
-                timeout=timedelta(seconds=10800),  # 3 hours
+                #timeout=timedelta(seconds=1800),  # 3 hours
                 rank=RANK,
                 world_size=WORLD_SIZE,
             )
@@ -240,7 +241,7 @@ class BaseTrainer:
         
         LOGGER.info(f'DDP info (HEADNODE): HOSTNAME : {hostname}')
         
-
+    @record
     def _setup_train(self, world_size):
         """Builds dataloaders and optimizer on correct rank process."""
         # Model
@@ -302,7 +303,7 @@ class BaseTrainer:
 
         # Dataloaders
         batch_size = self.batch_size // max(world_size, 1)
-        self.train_loader = self.get_dataloader(self.trainset, batch_size=batch_size, rank=RANK, mode="train")
+        self.train_loader = self.get_dataloader(self.trainset, batch_size=batch_size, rank=LOCAL_RANK, mode="train")
         if RANK in {-1, 0}:
             # Note: When training DOTA dataset, double batch size could get OOM on images with >2000 objects.
             self.test_loader = self.get_dataloader(
@@ -338,6 +339,8 @@ class BaseTrainer:
         """Train completed, evaluate and plot if specified by arguments."""
         if world_size > 1 or WORLD_SIZE > 1:
             self._setup_ddp(world_size)
+        # torch.cuda.set_device(LOCAL_RANK)
+        # self.device = torch.device("cuda", LOCAL_RANK)
         self._setup_train(world_size)
 
         nb = len(self.train_loader)  # number of batches

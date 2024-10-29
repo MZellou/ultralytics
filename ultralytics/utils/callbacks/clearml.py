@@ -12,6 +12,9 @@ try:
 
 except (ImportError, AssertionError):
     clearml = None
+    
+CLEARML_PROJECT = os.getenv("CLEARML_PROJECT")
+CLEARML_TASK = os.getenv("CLEARML_TASK")
 
 
 def _log_debug_samples(files, title="Debug Samples") -> None:
@@ -68,8 +71,8 @@ def on_pretrain_routine_start(trainer):
             PatchedMatplotlib.update_current_task(None)
         else:
             task = Task.init(
-                project_name=trainer.args.project or "Ultralytics",
-                task_name=trainer.args.name,
+                project_name=CLEARML_PROJECT or trainer.args.project or "Ultralytics",
+                task_name=CLEARML_TASK or trainer.args.name,
                 tags=["Ultralytics"],
                 output_uri=True,
                 reuse_last_task_id=False,
